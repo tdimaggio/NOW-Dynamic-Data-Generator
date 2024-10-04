@@ -23,55 +23,102 @@ TaskManager.prototype = {
 
     /**
      * Creates a case of the specified type with the given short description.
-     * @param {String} caseType - The type of case to create ('incident', 'csm_case', or 'hr_case').
-     * @param {String} shortDescription - The short description of the case.
+     * @param {String} caseType - The type of case to create ('incident', 'csm_case', 'hr_case', or 'healthcare_claim').
+     * @param {String} [shortDescription] - The short description of the case (not required for healthcare_claim).
+     * @param {Number} [numCases=1] - The number of cases to create (only applicable for healthcare_claim).
+     * @returns {Array|String|null} - The sys_id(s) of the created case(s), or null if failed.
      */
-    createCase: function(caseType, shortDescription) {
-        if (!caseType || !shortDescription) {
-            gs.error('Case type and short description must be provided.');
-            return;
+    createCase: function(caseType, shortDescription, numCases) {
+        if (!caseType) {
+            gs.error('Case type must be provided.');
+            return null;
         }
 
-        var caseSysId;
+        numCases = numCases || 1; // Default to 1 if not provided
+
+        var caseSysIds = [];
         var tableName;
 
         try {
-            // Determine the type of case to create and call the appropriate function
+            // Determine the table name based on case type
             switch (caseType) {
                 case 'incident':
-                    caseSysId = this._createIncident(shortDescription);
+                    if (!shortDescription) {
+                        gs.error('Short description must be provided for incidents.');
+                        return null;
+                    }
                     tableName = 'incident';
                     break;
                 case 'csm_case':
-                    caseSysId = this._createCSMCase(shortDescription);
+                    if (!shortDescription) {
+                        gs.error('Short description must be provided for CSM cases.');
+                        return null;
+                    }
                     tableName = 'sn_customerservice_case';
                     break;
                 case 'hr_case':
-                    caseSysId = this._createHRCase(shortDescription);
+                    if (!shortDescription) {
+                        gs.error('Short description must be provided for HR cases.');
+                        return null;
+                    }
                     tableName = 'sn_hr_core_case';
+                    break;
+                case 'healthcare_claim':
+                    tableName = 'sn_hcls_claim_header';
                     break;
                 default:
                     gs.error('Invalid case type specified: ' + caseType);
-                    return;
+                    return null;
             }
 
-            if (caseSysId) {
-                // Generate entries (comments and work notes) for the case
-                var entries = this._generateEntries(shortDescription);
-                // Add comments and work notes to the case
-                this._addCommentsAndWorkNotes(tableName, caseSysId, entries);
-                // Add an attachment to the case
-                this._addAttachment(
-                    tableName,
-                    caseSysId,
-                    'error_log.txt',
-                    this._generateUniqueContent('Generate a log snippet for the issue: "' + shortDescription + '".')
-                );
+            if (caseType === 'healthcare_claim') {
+                for (var i = 0; i < numCases; i++) {
+                    var caseSysId = this._createHealthcareClaim();
+                    if (caseSysId) {
+                        caseSysIds.push(caseSysId);
+                    } else {
+                        gs.error('Failed to create healthcare claim number ' + (i + 1));
+                    }
+                }
             } else {
-                gs.error('Failed to create case of type: ' + caseType);
+                if (numCases > 1) {
+                    gs.error('Creating multiple cases is only supported for healthcare claims.');
+                    return null;
+                }
+                var caseSysId;
+                if (caseType === 'incident') {
+                    caseSysId = this._createIncident(shortDescription);
+                } else if (caseType === 'csm_case') {
+                    caseSysId = this._createCSMCase(shortDescription);
+                } else if (caseType === 'hr_case') {
+                    caseSysId = this._createHRCase(shortDescription);
+                }
+
+                if (caseSysId) {
+                    // Generate entries (comments and work notes) for the case
+                    var entries = this._generateEntries(shortDescription);
+                    // Add comments and work notes to the case
+                    this._addCommentsAndWorkNotes(tableName, caseSysId, entries);
+                    // Add an attachment to the case
+                    this._addAttachment(
+                        tableName,
+                        caseSysId,
+                        'error_log.txt',
+                        this._generateUniqueContent('Generate a log snippet for the issue: "' + shortDescription + '".')
+                    );
+                    caseSysIds.push(caseSysId);
+                } else {
+                    gs.error('Failed to create case of type: ' + caseType);
+                    return null;
+                }
             }
+
+            // Return the sys_id(s) of the created case(s)
+            return caseSysIds.length === 1 ? caseSysIds[0] : caseSysIds;
+
         } catch (error) {
             gs.error('Error in createCase: ' + error.message);
+            return null;
         }
     },
 
@@ -82,11 +129,6 @@ TaskManager.prototype = {
      * @returns {String|null} - The sys_id of the created record, or null if failed.
      */
     _createCaseRecord: function(tableName, fields) {
-        if (!fields.short_description || !fields.opened_by) {
-            gs.error('Required fields are missing for table ' + tableName);
-            return null;
-        }
-
         var gr = new GlideRecord(tableName);
         gr.initialize();
         // Set field values from the fields object
@@ -95,7 +137,7 @@ TaskManager.prototype = {
         }
         var sysId = gr.insert();
         if (!sysId) {
-            gs.error('Failed to insert record into ' + tableName);
+            gs.error('Failed to insert record into ' + tableName + '. Error: ' + gr.getLastErrorMessage());
         }
         return sysId;
     },
@@ -182,6 +224,210 @@ TaskManager.prototype = {
     },
 
     /**
+     * Creates a healthcare claim with generated data.
+     * @returns {String|null} - The sys_id of the created healthcare claim, or null if failed.
+     */
+    _createHealthcareClaim: function() {
+        // Array of medical procedures to diversify the claim names
+        var procedures = [
+            'Orthopedic Surgery', 'Dental Procedure', 'Cardiac Treatment', 'Physical Therapy',
+            'Eye Examination', 'Maternity Care', 'Dermatology Consultation', 'Radiology Imaging',
+            'Laboratory Tests', 'Emergency Room Visit', 'Vaccination Service', 'Mental Health Counseling',
+            'Allergy Testing', 'Gastroenterology Procedure', 'Neurological Assessment'
+        ];
+        // Select a random procedure
+        var procedure = procedures[Math.floor(Math.random() * procedures.length)];
+
+        // Generate the name of the claim using GenAI
+        var namePrompt = 'Generate a realistic healthcare claim title for a ' + procedure + ' service. Do not include quotation marks.';
+        var name = this._generateUniqueContent(namePrompt);
+
+        // Remove any leading or trailing quotation marks from the name
+        name = name.replace(/^["']|["']$/g, '');
+
+        // For type field, choose one of the specified values
+        var types = ['institutional', 'oral', 'pharmacy', 'professional', 'vision'];
+        var type = types[Math.floor(Math.random() * types.length)];
+
+        // For patient field, pick a random value from the sn_hcls_patient table
+        var patientSysId = this._getRandomRecordSysId('sn_hcls_patient');
+
+        // Ensure patientSysId is valid
+        if (!patientSysId) {
+            gs.error('No patients found in sn_hcls_patient table.');
+            return null;
+        }
+
+        // Generate random identification numbers
+        var medicalRecordNo = this._generateRandomMedicalRecordNumber();
+        var patientAccountNo = this._generateRandomPatientAccountNumber();
+
+        // For member_plan, pick a random value from the sn_hcls_member_plan table
+        var memberPlanSysId = this._getRandomRecordSysId('sn_hcls_member_plan');
+
+        // For payer, pick a random value from the sn_hcls_organization table
+        var payerSysId = this._getRandomRecordSysId('sn_hcls_organization');
+
+        // For service_provider, pick a random value from sn_hcls_practitioner table
+        var serviceProviderSysId = this._getRandomRecordSysId('sn_hcls_practitioner');
+
+        // Generate random service provider ID
+        var serviceProviderId = this._generateRandomServiceProviderId();
+
+        // For preauth_header, pick a random value from sn_hcls_pre_auth_header table
+        var preAuthHeaderSysId = this._getRandomRecordSysId('sn_hcls_pre_auth_header');
+
+        // For status, choose one of the specified values
+        var statuses = ['draft', 'entered-in-error', 'active', 'paid', 'in-hold', 'denied', 'cancelled', 'suspended'];
+        var status = statuses[Math.floor(Math.random() * statuses.length)];
+
+        // Generate random billed DRG code
+        var billedDrgCode = this._generateRandomBilledDrgCode();
+
+        // Generate remarks using GenAI and patient's name
+        var patientName = this._getPatientName(patientSysId);
+        var remarksPrompt = 'As a medical provider, write remarks for a healthcare claim for patient ' + patientName + ' who received ' + procedure + '.';
+        var remarks = this._generateUniqueContent(remarksPrompt);
+
+        // Generate required date fields using GlideDateTime
+        var submittedDate = new GlideDateTime(); // Today
+
+        var acceptedDate = new GlideDateTime();
+        acceptedDate.addDaysLocalTime(2); // 2 days from now
+
+        var adjudicatedDate = new GlideDateTime();
+        adjudicatedDate.addDaysLocalTime(5); // 5 days from now
+
+        var paymentDate = new GlideDateTime();
+        paymentDate.addDaysLocalTime(10); // 10 days from now
+
+        // Generate random amounts
+        var claimAmount = this._generateRandomAmount(500, 5000); // Amount between $500 and $5000
+        var adjudicatedAmount = this._generateRandomAmount(0, claimAmount); // Between $0 and claimAmount
+        var feeReduction = this._generateRandomAmount(0, claimAmount - adjudicatedAmount);
+        var patientPayAmount = (claimAmount - adjudicatedAmount - feeReduction).toFixed(2);
+
+        // Build the fields object
+        var fields = {
+            name: name,
+            type: type,
+            patient: patientSysId,
+            medical_record_no: medicalRecordNo,
+            patient_account_no: patientAccountNo,
+            member_plan: memberPlanSysId,
+            payer: payerSysId,
+            service_provider: serviceProviderSysId,
+            service_provider_id: serviceProviderId,
+            preauth_header: preAuthHeaderSysId,
+            status: status,
+            billed_drg_code: billedDrgCode,
+            remarks: remarks,
+            // Include the specified date fields
+            submitted_date: submittedDate,
+            accepted_date: acceptedDate,
+            adjudicated_date: adjudicatedDate,
+            payment_date: paymentDate,
+            // Random amounts
+            claim_amount: claimAmount,
+            adjudicated_amount: adjudicatedAmount,
+            fee_reduction: feeReduction,
+            patient_pay_amount: patientPayAmount
+        };
+
+        // Create the healthcare claim record
+        return this._createCaseRecord('sn_hcls_claim_header', fields);
+    },
+
+    /**
+     * Generates a random amount between min and max.
+     * @param {Number} min - The minimum amount.
+     * @param {Number} max - The maximum amount.
+     * @returns {String} - The generated random amount as a string with two decimal places.
+     */
+    _generateRandomAmount: function(min, max) {
+        var amount = Math.random() * (max - min) + min;
+        return amount.toFixed(2);
+    },
+
+    /**
+     * Retrieves a random record's sys_id from the specified table.
+     * @param {String} tableName - The name of the table to query.
+     * @returns {String} - The sys_id of a random record, or an empty string if none found.
+     */
+    _getRandomRecordSysId: function(tableName) {
+        var gr = new GlideRecord(tableName);
+        gr.query();
+        var records = [];
+        while (gr.next()) {
+            records.push(gr.getUniqueValue());
+        }
+        if (records.length > 0) {
+            // Return a random record's sys_id from the list
+            return records[Math.floor(Math.random() * records.length)];
+        }
+        // Return empty string if no records found
+        return '';
+    },
+
+    /**
+     * Generates a random number string of specified length.
+     * @param {Number} length - The length of the number string to generate.
+     * @returns {String} - The generated random number string.
+     */
+    _generateRandomNumberString: function(length) {
+        var result = '';
+        for (var i = 0; i < length; i++) {
+            result += Math.floor(Math.random() * 10).toString();
+        }
+        return result;
+    },
+
+    /**
+     * Generates a random medical record number.
+     * @returns {String} - The generated medical record number.
+     */
+    _generateRandomMedicalRecordNumber: function() {
+        return 'MRN' + this._generateRandomNumberString(6);
+    },
+
+    /**
+     * Generates a random patient account number.
+     * @returns {String} - The generated patient account number.
+     */
+    _generateRandomPatientAccountNumber: function() {
+        return 'PAN' + this._generateRandomNumberString(8);
+    },
+
+    /**
+     * Generates a random service provider ID.
+     * @returns {String} - The generated service provider ID.
+     */
+    _generateRandomServiceProviderId: function() {
+        return 'SPID' + this._generateRandomNumberString(5);
+    },
+
+    /**
+     * Generates a random billed DRG code.
+     * @returns {String} - The generated billed DRG code.
+     */
+    _generateRandomBilledDrgCode: function() {
+        return 'DRG' + this._generateRandomNumberString(3);
+    },
+
+    /**
+     * Retrieves the name of the patient based on their sys_id.
+     * @param {String} patientSysId - The sys_id of the patient.
+     * @returns {String} - The name of the patient, or a default value if not found.
+     */
+    _getPatientName: function(patientSysId) {
+        var patientGr = new GlideRecord('sn_hcls_patient');
+        if (patientGr.get(patientSysId)) {
+            return patientGr.getDisplayValue('name');
+        }
+        return 'the patient';
+    },
+
+    /**
      * Generates a detailed description for the case based on the short description.
      * @param {String} shortDescription - The short description of the case.
      * @returns {String} - The generated detailed description.
@@ -190,16 +436,6 @@ TaskManager.prototype = {
         var prompt = 'Provide a detailed description for the issue: "' + shortDescription + '". Include possible causes and the impact on the user.';
         // Generate unique content based on the prompt
         return this._generateUniqueContent(prompt);
-    },
-
-    /**
-     * Generates a prompt by replacing placeholders in the template with the short description.
-     * @param {String} template - The template string containing placeholders.
-     * @param {String} shortDescription - The short description to insert into the template.
-     * @returns {String} - The generated prompt.
-     */
-    _generatePrompt: function(template, shortDescription) {
-        return template.replace('{shortDescription}', shortDescription);
     },
 
     /**
@@ -226,8 +462,7 @@ TaskManager.prototype = {
 
         for (var i = 0; i < promptTemplates.length; i++) {
             // Generate the prompt by replacing placeholders
-            var prompt = this._generatePrompt(promptTemplates[i], shortDescription);
-            prompt = prompt.replace('{ciName}', ciName).replace('{userName}', userName);
+            var prompt = promptTemplates[i].replace('{shortDescription}', shortDescription).replace('{ciName}', ciName).replace('{userName}', userName);
 
             // Generate unique content based on the prompt
             var content = this._generateUniqueContent(prompt);
@@ -307,7 +542,7 @@ TaskManager.prototype = {
     _getConfigurationItemName: function() {
         var ciGr = new GlideRecord('cmdb_ci');
         if (ciGr.get(this.CONFIGURATION_ITEM_SYSID)) {
-            return ciGr.getValue('name');
+            return ciGr.getDisplayValue('name');
         }
         return 'the affected system';
     },
@@ -320,7 +555,7 @@ TaskManager.prototype = {
     _getUserName: function(userSysId) {
         var userGr = new GlideRecord('sys_user');
         if (userGr.get(userSysId)) {
-            return userGr.getValue('name');
+            return userGr.getDisplayValue('name');
         }
         return 'the user';
     },
@@ -335,27 +570,6 @@ TaskManager.prototype = {
     _addAttachment: function(tableName, caseSysId, fileName, fileContent) {
         var attachment = new GlideSysAttachment();
         attachment.write(tableName, caseSysId, fileName, 'text/plain', fileContent);
-    },
-
-    /**
-     * Retrieves a random user's sys_id who has the specified role.
-     * @param {String} role - The role to filter users by.
-     * @returns {String} - The sys_id of a random user with the role, or the current user if none found.
-     */
-    _getRandomUserSysId: function(role) {
-        var userGr = new GlideRecord('sys_user');
-        userGr.addQuery('roles', 'CONTAINS', role);
-        userGr.query();
-        var users = [];
-        while (userGr.next()) {
-            users.push(userGr.getUniqueValue());
-        }
-        if (users.length > 0) {
-            // Return a random user from the list
-            return users[Math.floor(Math.random() * users.length)];
-        }
-        // Return the current user's sys_id if no users found
-        return gs.getUserID();
     },
 
     type: 'TaskManager'
