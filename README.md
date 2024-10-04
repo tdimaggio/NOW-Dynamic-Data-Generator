@@ -42,11 +42,18 @@ To ensure the TaskManager uses the correct AI provider:
 
 You can use the TaskManager in various ServiceNow server-side scripts. Here are some examples:
 
-### Basic Usage (e.g., Background Script)
+### Basic Usage to create an Incident (e.g., Background Script)
 
 ```javascript
 var taskManager = new TaskManager();
-taskManager.createCase('incident', 'Network connectivity issues in the marketing department');
+taskManager.createCase('incident', '<Your short description>');
+```
+
+### Basic Usage to create a Change Request (e.g., Background Script)
+
+```javascript
+var taskManager = new TaskManager();
+var changeRequestSysId = taskManager.createCase('change_request');
 ```
 
 ### Basic Usage to create a single healthcare claim with a random claim name (e.g., Background Script)
