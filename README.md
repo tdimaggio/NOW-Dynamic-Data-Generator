@@ -49,6 +49,17 @@ var taskManager = new TaskManager();
 taskManager.createCase('incident', 'Network connectivity issues in the marketing department');
 ```
 
+### Basic Usage to create a single healthcare claim with a random claim name (e.g., Background Script)
+```javascript
+var taskManager = new TaskManager();
+var claimSysIds = taskManager.createCase('healthcare_claim');
+```
+
+### Basic Usage to create multiple healthcare claims with random claim names (e.g., Background Script)
+```javascript
+var taskManager = new TaskManager();
+var claimSysIds = taskManager.createCase('healthcare_claim', null, 5); // Generates 5 claims
+```
 ### Usage in a Business Rule
 
 ```javascript
