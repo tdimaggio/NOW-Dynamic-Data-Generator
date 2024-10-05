@@ -16,7 +16,6 @@ TaskManager.prototype = {
     HR_ASSIGNMENT_GROUP_SYSID: 'd625dccec0a8016700a222a0f7900d6c', // Sys_id of the HR assignment group
     HR_SERVICE_SYSID: 'e228cde49f331200d9011977677fcf05', // Sys_id of the HR service
     AGENT_USER_SYSID: 'a8f98bb0eb32010045e1a5115206fe3a', // Sys_id of the agent user
-    CHANGE_MODEL_SYSID: '007c4001c343101035ae3f52c1d3aeb2', // Sys_id of the change model
 
     initialize: function() {
         // Initialization function (empty in this case)
@@ -24,9 +23,9 @@ TaskManager.prototype = {
 
     /**
      * Creates a case of the specified type with the given short description.
-     * @param {String} caseType - The type of case to create ('incident', 'csm_case', 'hr_case', 'healthcare_claim', or 'change_request').
-     * @param {String} [shortDescription] - The short description of the case (not required for healthcare_claim).
-     * @param {Number} [numCases=1] - The number of cases to create (only applicable for healthcare_claim).
+     * @param {String} caseType - The type of case to create ('incident', 'csm_case', 'hr_case', 'healthcare_claim', or 'pre_authorization').
+     * @param {String} [shortDescription] - The short description of the case (not required for 'healthcare_claim' and 'pre_authorization').
+     * @param {Number} [numCases=1] - The number of cases to create (only applicable for 'healthcare_claim' and 'pre_authorization').
      * @returns {Array|String|null} - The sys_id(s) of the created case(s), or null if failed.
      */
     createCase: function(caseType, shortDescription, numCases) {
@@ -67,38 +66,31 @@ TaskManager.prototype = {
                 case 'healthcare_claim':
                     tableName = 'sn_hcls_claim_header';
                     break;
-                case 'change_request':
-                    if (!shortDescription) {
-                        gs.error('Short description must be provided for change requests.');
-                        return null;
-                    }
-                    tableName = 'change_request';
+                case 'pre_authorization':
+                    tableName = 'sn_hcls_pre_auth_header';
                     break;
                 default:
                     gs.error('Invalid case type specified: ' + caseType);
                     return null;
             }
 
-            if (caseType === 'healthcare_claim') {
+            if (caseType === 'healthcare_claim' || caseType === 'pre_authorization') {
                 for (var i = 0; i < numCases; i++) {
-                    var caseSysId = this._createHealthcareClaim();
+                    var caseSysId;
+                    if (caseType === 'healthcare_claim') {
+                        caseSysId = this._createHealthcareClaim();
+                    } else if (caseType === 'pre_authorization') {
+                        caseSysId = this._createPreAuthorization();
+                    }
                     if (caseSysId) {
                         caseSysIds.push(caseSysId);
                     } else {
-                        gs.error('Failed to create healthcare claim number ' + (i + 1));
+                        gs.error('Failed to create ' + caseType + ' number ' + (i + 1));
                     }
-                }
-            } else if (caseType === 'change_request') {
-                var caseSysId = this._createChangeRequest();
-                if (caseSysId) {
-                    caseSysIds.push(caseSysId);
-                } else {
-                    gs.error('Failed to create change request.');
-                    return null;
                 }
             } else {
                 if (numCases > 1) {
-                    gs.error('Creating multiple cases is only supported for healthcare claims.');
+                    gs.error('Creating multiple cases is only supported for healthcare claims and pre-authorizations.');
                     return null;
                 }
                 var caseSysId;
@@ -355,204 +347,194 @@ TaskManager.prototype = {
     },
 
     /**
-     * Creates a change request with the specified short description.
-     * @param {String} shortDescription - The short description of the change request.
-     * @returns {String|null} - The sys_id of the created change request, or null if failed.
+     * Creates a pre-authorization record with generated data.
+     * @returns {String|null} - The sys_id of the created pre-authorization record, or null if failed.
      */
-    _createChangeRequest: function(shortDescription) {
-        // Get a random user from sys_user
-        var requestedBySysId = this._getRandomRecordSysId('sys_user');
+    _createPreAuthorization: function() {
+        // Generate a unique number for the pre-authorization
+        var number = this._generatePreAuthNumber();
 
-        // Get all choices for 'category' field and select a random one
-        var category = this._getRandomChoiceValue('change_request', 'category');
+        // For category, choose one of the specified values
+        var categories = ['urgent', 'expedited', 'routine'];
+        var category = categories[Math.floor(Math.random() * categories.length)];
 
-        // Get a random business service from cmdb_ci_service
-        var businessServiceSysId = this._getRandomRecordSysId('cmdb_ci_service');
+        // For status, choose one of the specified values
+        var statuses = ['Approved', 'Denied', 'Pending', 'In Progress'];
+        var status = statuses[Math.floor(Math.random() * statuses.length)];
 
-        // Get a random configuration item associated with the above business service
-        var cmdbCiSysId = this._getRandomRelatedCi(businessServiceSysId);
+        // For type, choose one of the specified values
+        var types = ['medical', 'pharmacy', 'dental', 'vision'];
+        var type = types[Math.floor(Math.random() * types.length)];
 
-        // Get random choices for priority, risk, impact
-        var priority = this._getRandomChoiceValue('change_request', 'priority');
-        var risk = this._getRandomChoiceValue('change_request', 'risk');
-        var impact = this._getRandomChoiceValue('change_request', 'impact');
+        // For patient, pick a random value from the sn_hcls_patient table
+        var patientSysId = this._getRandomRecordSysId('sn_hcls_patient');
 
-        // Generate unique content for short_description and description
-        var ciName = this._getCiName(cmdbCiSysId);
-        var shortDescPrompt = 'Generate a short description for a change request affecting the service "' + ciName + '". Please keep it to a single sentence.';
-        var generatedShortDescription = this._generateUniqueContent(shortDescPrompt);
+        if (!patientSysId) {
+            gs.error('No patients found in sn_hcls_patient table.');
+            return null;
+        }
 
-        var descPrompt = 'Provide a detailed description for a change request affecting the service "' + ciName + '". Include reasons and expected outcomes.';
-        var description = this._generateUniqueContent(descPrompt);
+        // For practitioner, pick a random value from the sn_hcls_practitioner table
+        var practitionerSysId = this._getRandomRecordSysId('sn_hcls_practitioner');
 
-        // Get a random assignment group from sys_user_group
-        var assignmentGroupSysId = this._getRandomRecordSysId('sys_user_group');
+        // For insurance, pick a random value from the sn_hcls_member_plan table
+        var insuranceSysId = this._getRandomRecordSysId('sn_hcls_member_plan');
 
-        // Get a random user from the above assignment group
-        var assignedToSysId = this._getRandomUserInGroup(assignmentGroupSysId);
+        // For prescription, pick a random value from the sn_hcls_medication table
+        var prescriptionSysId = this._getRandomRecordSysId('sn_hcls_medication');
 
-        // Generate unique content for justification, implementation_plan, backout_plan, test_plan
-        var justificationPrompt = 'Provide a justification for the change request affecting "' + ciName + '".';
-        var justification = this._generateUniqueContent(justificationPrompt);
+        // Generate a primary pre-authorization number
+        var primaryPreAuthNum = 'PA' + this._generateRandomNumberString(8);
 
-        var implementationPlanPrompt = 'Outline an implementation plan for the change request affecting "' + ciName + '".';
-        var implementationPlan = this._generateUniqueContent(implementationPlanPrompt);
+        // Use a list of more detailed predefined reasons and select one randomly
+        var reasons = [
+            'Patient presents with severe osteoarthritis of the knee causing significant mobility impairment; total knee replacement surgery is recommended to restore function and alleviate pain.',
+            'Due to a recent myocardial infarction, the patient requires immediate cardiac catheterization and possible stent placement to prevent further cardiac damage.',
+            'Patient has been diagnosed with stage II breast cancer; chemotherapy and radiation therapy are medically necessary as part of the treatment plan.',
+            'Advanced imaging such as MRI is required to evaluate unexplained neurological symptoms including persistent headaches and vision disturbances.',
+            'Patient suffers from chronic obstructive pulmonary disease (COPD) with frequent exacerbations; pulmonary rehabilitation therapy is essential to improve respiratory function.',
+            'Patient has not responded to first-line medications for epilepsy; pre-authorization for new anti-epileptic medication is requested to control seizures.',
+            'Orthodontic treatment is required to correct severe malocclusion impacting the patient\'s ability to chew and speak properly.',
+            'Patient requires specialized biologic therapy for rheumatoid arthritis due to inadequate response to conventional disease-modifying antirheumatic drugs.'
+        ];
+        var reason = reasons[Math.floor(Math.random() * reasons.length)];
 
-		var riskImpactPrompt = 'Analyze the risks and impacts associated with the change request affecting "' + ciName + '".';
-		var riskImpactAnalysis = this._generateUniqueContent(riskImpactPrompt);
+        // Generate notes using GenAI
+        var patientName = this._getPatientName(patientSysId);
+        var notesPrompt = 'Provide additional clinical notes for the pre-authorization request for patient ' + patientName + '.';
+        var notes = this._generateUniqueContent(notesPrompt);
 
-        var backoutPlanPrompt = 'Describe a backout plan for the change request affecting "' + ciName + '".';
-        var backoutPlan = this._generateUniqueContent(backoutPlanPrompt);
+        // Generate dates
+        var approvedDate = new GlideDateTime();
+        approvedDate.addDaysLocalTime(2); // 2 days from now
 
-        var testPlanPrompt = 'Develop a test plan for the change request affecting "' + ciName + '".';
-        var testPlan = this._generateUniqueContent(testPlanPrompt);
-
-        // Generate future dates for start_date and end_date
-        var startDate = new GlideDateTime();
-        startDate.addDaysLocalTime(Math.floor(Math.random() * 5) + 1); // 1 to 5 days from now
-
-        var endDate = new GlideDateTime();
-        endDate.addDaysLocalTime(Math.floor(Math.random() * 5) + 6); // 6 to 10 days from now
-
+        // Build the fields object
         var fields = {
-            requested_by: requestedBySysId,
+            number: number,
             category: category,
-            business_service: businessServiceSysId,
-            cmdb_ci: cmdbCiSysId,
-            priority: priority,
-            risk: risk,
-            impact: impact,
-            short_description: generatedShortDescription,
-            description: description,
-            change_model: this.CHANGE_MODEL_SYSID,
-            assignment_group: assignmentGroupSysId,
-            //assigned_to: assignedToSysId,
-            justification: justification,
-            implementation_plan: implementationPlan,
-			risk_impact_analysis: riskImpactAnalysis,
-            backout_plan: backoutPlan,
-            test_plan: testPlan,
-            start_date: startDate,
-            end_date: endDate
+            status: status,
+            type: type,
+            patient: patientSysId,
+            practitioner: practitionerSysId,
+            insurance: insuranceSysId,
+            prescription: prescriptionSysId,
+            primary_preauth_num: primaryPreAuthNum,
+            reason: reason,
+            notes: notes,
+            approved_date: approvedDate
+            // Additional fields can be populated as needed
         };
 
-        // Create the change request record
-        return this._createCaseRecord('change_request', fields);
+        // Create the pre-authorization record
+        return this._createCaseRecord('sn_hcls_pre_auth_header', fields);
     },
 
     /**
-     * Retrieves a random choice value for a given table and field.
-     * @param {String} tableName - The name of the table.
-     * @param {String} fieldName - The name of the field.
-     * @returns {String} - A random choice value.
+     * Generates a unique pre-authorization number.
+     * @returns {String} - The generated pre-authorization number.
      */
-    _getRandomChoiceValue: function(tableName, fieldName) {
-        var choices = [];
-        var choiceGR = new GlideRecord('sys_choice');
-        choiceGR.addQuery('name', tableName);
-        choiceGR.addQuery('element', fieldName);
-        choiceGR.query();
-        while (choiceGR.next()) {
-            choices.push(choiceGR.getValue('value'));
+    _generatePreAuthNumber: function() {
+        var gr = new GlideRecord('sn_hcls_pre_auth_header');
+        gr.orderByDesc('number');
+        gr.setLimit(1);
+        gr.query();
+        var lastNumber = 'PAUTH00000000';
+        if (gr.next()) {
+            lastNumber = gr.number.toString();
         }
-        if (choices.length > 0) {
-            return choices[Math.floor(Math.random() * choices.length)];
+        var numberInt = parseInt(lastNumber.replace('PAUTH', ''), 10);
+        var newNumberInt = numberInt + 1;
+        var newNumberStr = 'PAUTH' + newNumberInt.toString().padStart(8, '0');
+        return newNumberStr;
+    },
+
+    /**
+     * Generates a random amount between min and max.
+     * @param {Number} min - The minimum amount.
+     * @param {Number} max - The maximum amount.
+     * @returns {String} - The generated random amount as a string with two decimal places.
+     */
+    _generateRandomAmount: function(min, max) {
+        var amount = Math.random() * (max - min) + min;
+        return amount.toFixed(2);
+    },
+
+    /**
+     * Retrieves a random record's sys_id from the specified table.
+     * @param {String} tableName - The name of the table to query.
+     * @returns {String} - The sys_id of a random record, or an empty string if none found.
+     */
+    _getRandomRecordSysId: function(tableName) {
+        var gr = new GlideRecord(tableName);
+        gr.query();
+        var records = [];
+        while (gr.next()) {
+            records.push(gr.getUniqueValue());
         }
+        if (records.length > 0) {
+            // Return a random record's sys_id from the list
+            return records[Math.floor(Math.random() * records.length)];
+        }
+        // Return empty string if no records found
         return '';
     },
 
     /**
-     * Retrieves a random configuration item associated with a business service.
-     * @param {String} businessServiceSysId - The sys_id of the business service.
-     * @returns {String} - The sys_id of a related configuration item.
+     * Generates a random number string of specified length.
+     * @param {Number} length - The length of the number string to generate.
+     * @returns {String} - The generated random number string.
      */
-_getRandomRelatedCi: function(businessServiceSysId) {
-    var ciSysIds = [];
-    var relGR = new GlideRecord('cmdb_rel_ci');
-    // Find relationships where the business service is either the parent or child
-    relGR.addQuery('parent', businessServiceSysId).addOrCondition('child', businessServiceSysId);
-    relGR.query();
-    while (relGR.next()) {
-        // If the business service is the parent, get the child CI
-        if (relGR.parent.sys_id.toString() === businessServiceSysId) {
-            ciSysIds.push(relGR.child.sys_id.toString());
-        } else {
-            // If the business service is the child, get the parent CI
-            ciSysIds.push(relGR.parent.sys_id.toString());
+    _generateRandomNumberString: function(length) {
+        var result = '';
+        for (var i = 0; i < length; i++) {
+            result += Math.floor(Math.random() * 10).toString();
         }
-    }
-    if (ciSysIds.length > 0) {
-        return ciSysIds[Math.floor(Math.random() * ciSysIds.length)];
-    } else {
-        // If no related CIs, pick any random CI
-        return this._getRandomRecordSysId('cmdb_ci');
-    }
-},
-
-
-    /**
-     * Retrieves the name of a configuration item based on its sys_id.
-     * @param {String} ciSysId - The sys_id of the configuration item.
-     * @returns {String} - The name of the configuration item.
-     */
-    _getCiName: function(ciSysId) {
-        var ciGr = new GlideRecord('cmdb_ci');
-        if (ciGr.get(ciSysId)) {
-            return ciGr.getDisplayValue('name');
-        }
-        return 'the configuration item';
+        return result;
     },
 
     /**
-     * Retrieves a random user who is a member of the specified group.
-     * @param {String} groupSysId - The sys_id of the group.
-     * @returns {String} - The sys_id of a user in the group.
+     * Generates a random medical record number.
+     * @returns {String} - The generated medical record number.
      */
-    _getRandomUserInGroup: function(groupSysId) {
-        var userSysIds = [];
-        var groupMemberGR = new GlideRecord('sys_user_grmember');
-        groupMemberGR.addQuery('group', groupSysId);
-        groupMemberGR.query();
-        while (groupMemberGR.next()) {
-            userSysIds.push(groupMemberGR.getValue('user'));
-        }
-        if (userSysIds.length > 0) {
-            return userSysIds[Math.floor(Math.random() * userSysIds.length)];
-        } else {
-            // If no users in group, pick any random user
-            return this._getRandomRecordSysId('sys_user');
-        }
+    _generateRandomMedicalRecordNumber: function() {
+        return 'MRN' + this._generateRandomNumberString(6);
     },
 
     /**
-     * Generates unique content based on the provided prompt by calling an external API.
-     * @param {String} prompt - The prompt to generate content from.
-     * @returns {String} - The generated unique content.
+     * Generates a random patient account number.
+     * @returns {String} - The generated patient account number.
      */
-    _generateUniqueContent: function(prompt) {
-        var request = {
-            "executionRequests": [
-                {
-                    "payload": {
-                        "prompt": prompt
-                    },
-                    "capabilityId": "0c90ca79533121106b38ddeeff7b12d7"
-                }
-            ]
-        };
+    _generateRandomPatientAccountNumber: function() {
+        return 'PAN' + this._generateRandomNumberString(8);
+    },
 
-        // Execute the request using OneExtendUtil
-        var response = sn_one_extend.OneExtendUtil.execute(request);
+    /**
+     * Generates a random service provider ID.
+     * @returns {String} - The generated service provider ID.
+     */
+    _generateRandomServiceProviderId: function() {
+        return 'SPID' + this._generateRandomNumberString(5);
+    },
 
-        if (response && response.capabilities && response.capabilities["0c90ca79533121106b38ddeeff7b12d7"]) {
-            var uniqueContent = response.capabilities["0c90ca79533121106b38ddeeff7b12d7"].response;
-            // Remove any leading or trailing quotation marks
-            uniqueContent = uniqueContent.replace(/^["']|["']$/g, '');
-            return uniqueContent;
-        } else {
-            gs.error('Error generating unique content.');
-            return 'Unable to generate content at this time.';
+    /**
+     * Generates a random billed DRG code.
+     * @returns {String} - The generated billed DRG code.
+     */
+    _generateRandomBilledDrgCode: function() {
+        return 'DRG' + this._generateRandomNumberString(3);
+    },
+
+    /**
+     * Retrieves the name of the patient based on their sys_id.
+     * @param {String} patientSysId - The sys_id of the patient.
+     * @returns {String} - The name of the patient, or a default value if not found.
+     */
+    _getPatientName: function(patientSysId) {
+        var patientGr = new GlideRecord('sn_hcls_patient');
+        if (patientGr.get(patientSysId)) {
+            return patientGr.getDisplayValue('name');
         }
+        return 'the patient';
     },
 
     /**
@@ -635,93 +617,32 @@ _getRandomRelatedCi: function(businessServiceSysId) {
     },
 
     /**
-     * Adds an attachment to the specified case.
-     * @param {String} tableName - The name of the table containing the case.
-     * @param {String} caseSysId - The sys_id of the case record.
-     * @param {String} fileName - The name of the attachment file.
-     * @param {String} fileContent - The content of the attachment file.
+     * Generates unique content based on the provided prompt by calling an external API.
+     * @param {String} prompt - The prompt to generate content from.
+     * @returns {String} - The generated unique content.
      */
-    _addAttachment: function(tableName, caseSysId, fileName, fileContent) {
-        var attachment = new GlideSysAttachment();
-        attachment.write(tableName, caseSysId, fileName, 'text/plain', fileContent);
-    },
+    _generateUniqueContent: function(prompt) {
+        var request = {
+            "executionRequests": [
+                {
+                    "payload": {
+                        "prompt": prompt
+                    },
+                    "capabilityId": "0c90ca79533121106b38ddeeff7b12d7"
+                }
+            ]
+        };
 
-    /**
-     * Retrieves a random record's sys_id from the specified table.
-     * @param {String} tableName - The name of the table to query.
-     * @returns {String} - The sys_id of a random record, or an empty string if none found.
-     */
-    _getRandomRecordSysId: function(tableName) {
-        var gr = new GlideRecord(tableName);
-        gr.query();
-        var records = [];
-        while (gr.next()) {
-            records.push(gr.getUniqueValue());
+        // Execute the request using OneExtendUtil
+        var response = sn_one_extend.OneExtendUtil.execute(request);
+
+        if (response && response.capabilities && response.capabilities["0c90ca79533121106b38ddeeff7b12d7"]) {
+            var uniqueContent = response.capabilities["0c90ca79533121106b38ddeeff7b12d7"].response;
+            return uniqueContent;
+        } else {
+            gs.error('Error generating unique content.');
+            return 'Unable to generate content at this time.';
         }
-        if (records.length > 0) {
-            // Return a random record's sys_id from the list
-            return records[Math.floor(Math.random() * records.length)];
-        }
-        // Return empty string if no records found
-        return '';
-    },
-
-    /**
-     * Generates a random number string of specified length.
-     * @param {Number} length - The length of the number string to generate.
-     * @returns {String} - The generated random number string.
-     */
-    _generateRandomNumberString: function(length) {
-        var result = '';
-        for (var i = 0; i < length; i++) {
-            result += Math.floor(Math.random() * 10).toString();
-        }
-        return result;
-    },
-
-    /**
-     * Generates a random medical record number.
-     * @returns {String} - The generated medical record number.
-     */
-    _generateRandomMedicalRecordNumber: function() {
-        return 'MRN' + this._generateRandomNumberString(6);
-    },
-
-    /**
-     * Generates a random patient account number.
-     * @returns {String} - The generated patient account number.
-     */
-    _generateRandomPatientAccountNumber: function() {
-        return 'PAN' + this._generateRandomNumberString(8);
-    },
-
-    /**
-     * Generates a random service provider ID.
-     * @returns {String} - The generated service provider ID.
-     */
-    _generateRandomServiceProviderId: function() {
-        return 'SPID' + this._generateRandomNumberString(5);
-    },
-
-    /**
-     * Generates a random billed DRG code.
-     * @returns {String} - The generated billed DRG code.
-     */
-    _generateRandomBilledDrgCode: function() {
-        return 'DRG' + this._generateRandomNumberString(3);
-    },
-
-    /**
-     * Retrieves the name of the patient based on their sys_id.
-     * @param {String} patientSysId - The sys_id of the patient.
-     * @returns {String} - The name of the patient, or a default value if not found.
-     */
-    _getPatientName: function(patientSysId) {
-        var patientGr = new GlideRecord('sn_hcls_patient');
-        if (patientGr.get(patientSysId)) {
-            return patientGr.getDisplayValue('name');
-        }
-        return 'the patient';
     },
 
     /**
@@ -750,14 +671,15 @@ _getRandomRelatedCi: function(businessServiceSysId) {
     },
 
     /**
-     * Generates a random amount between min and max.
-     * @param {Number} min - The minimum amount.
-     * @param {Number} max - The maximum amount.
-     * @returns {String} - The generated random amount as a string with two decimal places.
+     * Adds an attachment to the specified case.
+     * @param {String} tableName - The name of the table containing the case.
+     * @param {String} caseSysId - The sys_id of the case record.
+     * @param {String} fileName - The name of the attachment file.
+     * @param {String} fileContent - The content of the attachment file.
      */
-    _generateRandomAmount: function(min, max) {
-        var amount = Math.random() * (max - min) + min;
-        return amount.toFixed(2);
+    _addAttachment: function(tableName, caseSysId, fileName, fileContent) {
+        var attachment = new GlideSysAttachment();
+        attachment.write(tableName, caseSysId, fileName, 'text/plain', fileContent);
     },
 
     type: 'TaskManager'
